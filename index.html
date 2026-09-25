@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>In-Browser STT + Diarization</title>
+    <!-- GitHub Pages は COOP/COEP ヘッダーを付けられないため、Service Worker で付与してマルチスレッド WASM を有効にする -->
+    <script src="./coi-serviceworker.js"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>In-Browser STT + Diarization</h1>
+      <p class="subtitle">
+        Whisper（文字起こし）と NVIDIA Nemotron-3-Diarization（話者分離）をブラウザ内だけで実行します。音声はサーバーに送信されません。
+      </p>
+      <div class="env" id="env"></div>
+    </header>
+
+    <main>
+      <section class="card">
+        <label class="drop" id="drop">
+          <input type="file" id="file" accept="audio/*,video/*" hidden />
+          <span id="drop-label">音声・動画ファイルをドロップ、またはクリックして選択</span>
+        </label>
+
+        <div class="settings">
+          <label>
+            文字起こしモデル
+            <select id="asr-model">
+              <option value="onnx-community/whisper-base_timestamped">Whisper base（軽量）</option>
+              <option value="onnx-community/whisper-small_timestamped" selected>Whisper small（標準）</option>
+              <option value="onnx-community/whisper-large-v3-turbo_timestamped" data-webgpu-only>Whisper large-v3-turbo（高精度・WebGPU）</option>
+            </select>
+          </label>
+          <label>
+            言語
+            <select id="language">
+              <option value="japanese" selected>日本語</option>
+              <option value="english">英語</option>
+              <option value="">自動判定</option>
+            </select>
+          </label>
+          <label>
+            話者分離モデル
+            <select id="diar-model">
+              <option value="step_int8" selected>INT8（約 103 MB）</option>
+              <option value="step">FP32（約 396 MB）</option>
+            </select>
+          </label>
+          <label>
+            話者分離のレイテンシー設定
+            <select id="preset"></select>
+          </label>
+        </div>
+
+        <button id="run" class="primary" disabled>処理を開始</button>
+      </section>
+
+      <section class="card status" id="status" hidden>
+        <div class="task">
+          <div class="task-head"><span>話者分離</span><span id="diar-text">待機中</span></div>
+          <progress id="diar-progress" max="1" value="0"></progress>
+        </div>
+        <div class="task">
+          <div class="task-head"><span>文字起こし</span><span id="asr-text">待機中</span></div>
+          <progress id="asr-progress" max="1" value="0"></progress>
+        </div>
+      </section>
+
+      <section class="card" id="result" hidden>
+        <audio id="player" controls></audio>
+        <div class="timeline-wrap">
+          <canvas id="timeline"></canvas>
+        </div>
+        <div class="summary" id="summary"></div>
+        <ol class="transcript" id="transcript"></ol>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
