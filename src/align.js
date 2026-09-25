@@ -22,6 +22,16 @@ export function toSegments(probs, threshold = 0.5) {
   return segments.sort((a, b) => a.start - b.start);
 }
 
+/** [start, end) 秒で誰かの確率が閾値を超える最初のフレームの時刻 (秒)。なければ -1 */
+export function findSpeech(probs, start, end, threshold = 0.5) {
+  const numFrames = probs.length / NUM_SPEAKERS;
+  const f1 = Math.min(numFrames, Math.ceil(end * FRAMES_PER_SEC));
+  for (let f = Math.max(0, Math.floor(start * FRAMES_PER_SEC)); f < f1; f++) {
+    for (let s = 0; s < NUM_SPEAKERS; s++) if (probs[f * NUM_SPEAKERS + s] > threshold) return f / FRAMES_PER_SEC;
+  }
+  return -1;
+}
+
 // [start, end] 秒の区間で確率の平均が最大の話者と、その平均値
 function dominantSpeaker(probs, start, end) {
   const numFrames = probs.length / NUM_SPEAKERS;

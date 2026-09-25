@@ -144,6 +144,16 @@ button.primary:disabled {
   cursor: default;
 }
 
+button.primary.recording {
+  background: #e5484d;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
 .task + .task {
   margin-top: 12px;
 }

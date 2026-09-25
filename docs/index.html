@@ -6,8 +6,8 @@
     <title>In-Browser STT + Diarization</title>
     <!-- GitHub Pages は COOP/COEP ヘッダーを付けられないため、Service Worker で付与してマルチスレッド WASM を有効にする -->
     <script src="./coi-serviceworker.js"></script>
-    <script type="module" crossorigin src="./assets/index-Bq8rDolW.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-Dgy8m3ag.css">
+    <script type="module" crossorigin src="./assets/index-D0CUNHK4.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-D5cZpceS.css">
   </head>
   <body>
     <header class="app-header">
@@ -55,7 +55,10 @@
           </label>
         </div>
 
-        <button id="run" class="primary" disabled>処理を開始</button>
+        <div class="actions">
+          <button id="run" class="primary" disabled>ファイルを処理</button>
+          <button id="mic" class="primary">マイクで録音を開始</button>
+        </div>
       </section>
 
       <section class="card status" id="status" hidden>
