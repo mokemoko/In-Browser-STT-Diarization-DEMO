@@ -25,10 +25,13 @@ export class DiarizationSession {
   /**
    * @param {object} models { ort, embedSession, stepSession, melFilters, silenceEmbed }
    * @param {keyof LATENCY_PRESETS} presetName
+   * @param {{catchUp?: boolean}} options catchUp: 処理が遅れてチャンクがたまったら、1 回の推論でまとめて処理する。
+   *   推論回数が減るので実時間に追いつけるが、チャンク長が変わるため結果は catchUp なしと完全には一致しない。
    */
-  constructor(models, presetName) {
+  constructor(models, presetName, { catchUp = false } = {}) {
     this.models = models;
     this.preset = LATENCY_PRESETS[presetName];
+    this.catchUp = catchUp;
     this.mel = new LogMelStream(models.melFilters);
     this.cache = new SpeakerCache(NUM_SPEAKERS, this.preset.fifoLength, this.preset.updatePeriod, models.silenceEmbed);
     this.pendingMel = new Float32Array(0); // 8 フレームに満たず、まだ埋め込んでいない mel
@@ -44,7 +47,8 @@ export class DiarizationSession {
     const { chunkLength, rightContext } = this.preset;
     const outputs = [];
     while (this.embeds.length >= chunkLength + rightContext) {
-      outputs.push(await this.#step(chunkLength, rightContext));
+      const numChunks = this.catchUp ? Math.floor((this.embeds.length - rightContext) / chunkLength) : 1;
+      outputs.push(await this.#step(numChunks * chunkLength, rightContext));
     }
     const probs = concat(outputs);
     this.numOutputFrames += probs.length / NUM_SPEAKERS;

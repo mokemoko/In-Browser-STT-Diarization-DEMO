@@ -1,7 +1,7 @@
 import './style.css';
 import { LATENCY_PRESETS, NUM_SPEAKERS } from './diarization/session.js';
 import { SAMPLE_RATE } from './diarization/features.js';
-import { findSpeech, toSegments, toTurns } from './align.js';
+import { findSilenceGaps, findSpeech, toSegments, toTurns } from './align.js';
 import { startMicrophone, encodeWav } from './mic.js';
 
 const DIAR_PUSH_SEC = 10; // 話者分離 worker に一度に渡す長さ
@@ -12,6 +12,11 @@ const ASR_STEP_SEC = 1;
 const ASR_FORCE_SEC = 20;
 // Whisper は無音からも文章を作ってしまうので、話者分離で誰も話していない区間は渡さない。前後にこれだけ余白を残す
 const SPEECH_PAD_SEC = 0.3;
+// 単語の時刻は ±0.2 秒ほどずれるので、確定と次の窓の開始は単語の終わりではなく、これ以上続く無音区間の中で区切る
+const MIN_GAP_SEC = 0.2;
+// 録音中の強制確定で無音区間を探すのは、確定する範囲の最後のこれだけ。
+// 話し続けていて無音が手前にしかないと窓がほとんど進まず、同じ区間を何度もかけ直して遅くなるので
+const MAX_CUT_BACK_SEC = 5;
 const LABEL_WIDTH = 64; // タイムライン左の話者名の幅 (px)
 const SPEAKER_COLORS = ['#3b6ef5', '#e5484d', '#30a46c', '#f5a524', '#8e4ec6', '#12a594', '#d6409f', '#7c8594'];
 
@@ -88,7 +93,9 @@ async function detectEnvironment() {
     [crossOriginIsolated ? 'マルチスレッド WASM' : 'シングルスレッド WASM', crossOriginIsolated],
   ];
   ui.env.innerHTML = badges.map(([text, ok]) => `<span class="badge ${ok ? 'ok' : 'warn'}">${text}</span>`).join('');
-  for (const option of ui.asrModel.querySelectorAll('[data-webgpu-only]')) option.disabled = !hasWebGPU;
+  for (const option of document.querySelectorAll('[data-webgpu-only]')) option.disabled = !hasWebGPU;
+  // 話者分離は WebGPU の方が大幅に速く、マイク入力で実時間に追いつきやすい
+  if (hasWebGPU) ui.diarModel.value = 'step|webgpu';
 }
 
 for (const [name, preset] of Object.entries(LATENCY_PRESETS)) ui.preset.add(new Option(preset.label, name));
@@ -136,11 +143,18 @@ function appendProbs(chunk) {
   probs = merged;
 }
 
+// 選択中の話者分離モデルを読み込む。value は "<ファイル名>|<device>"
+function requestDiarizationModel() {
+  const [model, device] = ui.diarModel.value.split('|');
+  return diarRequest({ type: 'load', model, device });
+}
+
 async function loadDiarization() {
   setTask('diar', 'モデルを準備中…', null);
-  const ready = await diarRequest({ type: 'load', model: ui.diarModel.value });
-  await diarRequest({ type: 'start', preset: ui.preset.value });
-  return ready;
+  const ready = await requestDiarizationModel();
+  // マイク入力では推論が遅れたらチャンクをまとめて処理し、遅れが積み上がらないようにする
+  await diarRequest({ type: 'start', preset: ui.preset.value, catchUp: recording });
+  return { backend: ui.diarModel.value.endsWith('|webgpu') ? 'WebGPU' : `${ready.threads} スレッド` };
 }
 
 async function loadAsr() {
@@ -214,7 +228,7 @@ async function stopRecording() {
 }
 
 // 話者分離: 届いた分を DIAR_PUSH_SEC ずつ push する。session 側がチャンク + lookahead 分たまるまで確率を返さないだけ
-async function diarizeStream({ threads }) {
+async function diarizeStream({ backend }) {
   const live = recording;
   const started = performance.now();
   try {
@@ -239,15 +253,54 @@ async function diarizeStream({ threads }) {
     notifyData();
   }
   const sec = (performance.now() - started) / 1000;
-  if (live) setTask('diar', `完了（${threads} スレッド）`, 1);
-  else setTask('diar', `完了（${sec.toFixed(1)} 秒 / 実時間の ${(audio.length / SAMPLE_RATE / sec).toFixed(0)} 倍速・${threads} スレッド）`, 1);
+  if (live) setTask('diar', `完了（${backend}）`, 1);
+  else setTask('diar', `完了（${sec.toFixed(1)} 秒 / 実時間の ${(audio.length / SAMPLE_RATE / sec).toFixed(0)} 倍速・${backend}）`, 1);
 }
 
 const diarizedSec = () => probs.length / NUM_SPEAKERS / 100;
 const sameWord = (a, b) => a.text.trim() === b.text.trim();
 const inSpeech = w => findSpeech(probs, w.start - SPEECH_PAD_SEC, w.end + SPEECH_PAD_SEC) >= 0;
 
-// 文字起こし: 未確定区間の先頭から最大 30 秒を Whisper に渡し、確定した単語の終わりから次の窓を始める。
+/**
+ * 先頭 maxCount 語のうち、無音区間で区切れる最も後ろの位置。
+ * words[count - 1] と words[count] の間 (中点で比べる) に無音区間の中央があるところだけで区切るので、
+ * 時刻が前後する幻覚の単語があっても、確定する単語はすべて区切りより前、残りはすべて後ろになる。
+ * @returns {{count: number, at: number} | null} 確定する単語数と、区切る時刻 (無音区間の中央, 秒)
+ */
+function findCut(words, maxCount, fromSec) {
+  const mid = w => (w.start + w.end) / 2;
+  const gaps = findSilenceGaps(probs, fromSec, Math.min(diarizedSec(), words[maxCount - 1].end) + MIN_GAP_SEC, MIN_GAP_SEC);
+  for (let count = maxCount; count >= 1; count--) {
+    const before = Math.max(...words.slice(0, count).map(mid));
+    const after = Math.min(...words.slice(count).map(mid));
+    const gap = gaps.findLast(g => (g.start + g.end) / 2 > before && (g.start + g.end) / 2 <= after);
+    if (gap) return { count, at: (gap.start + gap.end) / 2 };
+  }
+  return null;
+}
+
+// Whisper は同じ句を延々と繰り返す幻覚を起こすことがある。同じ並びが 3 回以上 (合わせて 6 語以上) 続いたら、
+// 最初の 1 回だけ残してそこで打ち切る
+function trimRepetition(words) {
+  for (let i = 0; i < words.length; i++) {
+    for (let len = 1; len <= 10 && i + 3 * len <= words.length; len++) {
+      let reps = 1;
+      while (i + (reps + 1) * len <= words.length && words.slice(i, i + len).every((w, k) => sameWord(w, words[i + reps * len + k]))) reps++;
+      if (reps >= 3 && reps * len >= 6) return words.slice(0, i + len);
+    }
+  }
+  return words;
+}
+
+// 次の窓の先頭で、直前に確定した単語をもう一度認識していたら落とす
+function dropRepeated(words, committed) {
+  for (let k = Math.min(3, words.length, committed.length); k > 0; k--) {
+    if (words.slice(0, k).every((w, i) => sameWord(w, committed[committed.length - k + i]))) return words.slice(k);
+  }
+  return words;
+}
+
+// 文字起こし: 未確定区間の先頭から最大 30 秒を Whisper に渡し、確定した単語の後の無音区間から次の窓を始める。
 // 話者分離で無音と分かっている区間は飛ばす。
 // 録音中は低遅延のため ASR_STEP_SEC ごとに同じ区間をかけ直し、2 回続けて一致した単語を確定する。
 // ファイル (と録音停止後) は窓全体の話者分離を待ってから 1 回だけかける
@@ -286,23 +339,39 @@ async function transcribeStream(device) {
     });
     // Whisper は内部で 30 秒にゼロ埋めするので、窓の外の時刻が返ることがある。窓に収め、無音区間の単語は落とす
     const windowEnd = end / SAMPLE_RATE;
-    const words = res.words
-      .map(w => ({ ...w, start: Math.min(w.start, windowEnd), end: Math.min(w.end, windowEnd) }))
-      .filter(w => w.start < windowEnd)
-      .filter(w => w.end > diarizedSec() || inSpeech(w));
+    const recognized = dropRepeated(
+      res.words
+        .map(w => ({ ...w, start: Math.min(w.start, windowEnd), end: Math.min(w.end, windowEnd) }))
+        .filter(w => w.start < windowEnd)
+        .filter(w => w.end > diarizedSec() || inSpeech(w)),
+      committed,
+    );
+    // 繰り返しの幻覚が出た窓は、その手前までを確定して、続きを別の位置から始まる窓でかけ直す
+    const words = trimRepetition(recognized);
+    const looped = words.length < recognized.length;
 
-    const isLast = !recording && end === audio.length;
-    const flush = !recording || end - start >= ASR_FORCE_SEC * SAMPLE_RATE;
+    const isLast = !recording && end === audio.length && !looped;
+    const flush = !recording || looped || end - start >= ASR_FORCE_SEC * SAMPLE_RATE;
     let n = 0;
     while (n < tentative.length && n < words.length && sameWord(tentative[n], words[n])) n++;
-    if (isLast) n = words.length;
     // 窓の終わりにかかる最後の単語は切れている可能性があるので、次の窓でかけ直す
-    else if (flush) n = Math.max(n, words.at(-1)?.end < windowEnd - ASR_STEP_SEC ? words.length : words.length - 1);
+    if (flush && !isLast) n = Math.max(n, words.at(-1)?.end < windowEnd - ASR_STEP_SEC ? words.length : words.length - 1);
+    // 録音中は 1〜2 秒ごとに区切るので、単語の頭が欠けないよう無音区間で区切る。区切れる無音がまだ無ければ確定を待ち、
+    // 強制確定のときだけ単語の終わりで区切る。ファイル (と録音停止後) は区切りが窓ごとに 1 回なので単語の終わりで区切る
+    let cutAt = -1;
+    if (isLast) n = words.length;
+    else if (n > 0) {
+      const searchFrom = flush ? Math.max(start / SAMPLE_RATE, words[n - 1].end - MAX_CUT_BACK_SEC) : start / SAMPLE_RATE;
+      const cut = recording ? findCut(words, n, searchFrom) : null;
+      if (cut) [n, cutAt] = [cut.count, cut.at];
+      else if (flush) cutAt = words[n - 1].end;
+      else n = 0;
+    }
 
     committed.push(...words.slice(0, n));
     tentative = words.slice(n);
     if (isLast) from = end;
-    else if (n > 0) from = Math.min(end, Math.max(start, Math.round(words[n - 1].end * SAMPLE_RATE)));
+    else if (n > 0) from = Math.min(end, Math.max(start, Math.round(cutAt * SAMPLE_RATE)));
     // 確定できる単語がない・時刻が進まないまま窓が長くなったときは、直近だけ残して先へ進む
     if (flush && !isLast && from <= start) from = end - ASR_STEP_SEC * SAMPLE_RATE;
 
@@ -337,7 +406,7 @@ ui.mic.addEventListener('click', async () => {
   if (ui.preset.value === 'offline') ui.preset.value = 'low_latency';
   try {
     // モデルを読み込み終えてから録音を始める (読み込み中の音声が溜まって遅れないように)
-    await Promise.all([diarRequest({ type: 'load', model: ui.diarModel.value }), loadAsr()]);
+    await Promise.all([requestDiarizationModel(), loadAsr()]);
     audio = new Float32Array(0);
     recording = true;
     stopMicrophone = await startMicrophone(appendAudio);

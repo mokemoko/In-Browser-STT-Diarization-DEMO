@@ -32,6 +32,24 @@ export function findSpeech(probs, start, end, threshold = 0.5) {
   return -1;
 }
 
+/** [start, end) 秒で、誰の確率も閾値以下の区間が minGap 秒以上続くところ [{start, end}] (秒) */
+export function findSilenceGaps(probs, start, end, minGap, threshold = 0.5) {
+  const numFrames = probs.length / NUM_SPEAKERS;
+  const f1 = Math.min(numFrames, Math.ceil(end * FRAMES_PER_SEC));
+  const gaps = [];
+  let onset = -1;
+  for (let f = Math.max(0, Math.floor(start * FRAMES_PER_SEC)); f <= f1; f++) {
+    let silent = f < f1;
+    for (let s = 0; silent && s < NUM_SPEAKERS; s++) if (probs[f * NUM_SPEAKERS + s] > threshold) silent = false;
+    if (silent && onset < 0) onset = f;
+    if (!silent && onset >= 0) {
+      if ((f - onset) / FRAMES_PER_SEC >= minGap) gaps.push({ start: onset / FRAMES_PER_SEC, end: f / FRAMES_PER_SEC });
+      onset = -1;
+    }
+  }
+  return gaps;
+}
+
 // [start, end] 秒の区間で確率の平均が最大の話者と、その平均値
 function dominantSpeaker(probs, start, end) {
   const numFrames = probs.length / NUM_SPEAKERS;

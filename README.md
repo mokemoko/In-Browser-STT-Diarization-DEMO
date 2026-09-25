@@ -22,7 +22,7 @@ GitHub Pages は COOP/COEP ヘッダーを付けられないため、[coi-servic
 | 処理 | モデル | ランタイム |
 |---|---|---|
 | 文字起こし | Whisper base / small / large-v3-turbo (`onnx-community/*_timestamped`, 単語タイムスタンプ付き) | Transformers.js (WebGPU があれば WebGPU, なければ WASM) |
-| 話者分離 | NVIDIA Nemotron-3-Diarization の ONNX 変換版 ([NealCaren/Nemotron-3-Diarization-ONNX](https://huggingface.co/NealCaren/Nemotron-3-Diarization-ONNX)) | onnxruntime-web (WASM, マルチスレッド) |
+| 話者分離 | NVIDIA Nemotron-3-Diarization の ONNX 変換版 ([NealCaren/Nemotron-3-Diarization-ONNX](https://huggingface.co/NealCaren/Nemotron-3-Diarization-ONNX)) | onnxruntime-web。INT8 を WASM (マルチスレッド) か、FP32 を WebGPU で。WebGPU があれば既定で WebGPU |
 | 突き合わせ | 各単語の区間で話者確率の平均が最大の話者を割り当て、同じ話者の連続を 1 発話にまとめる | plain JS |
 
 Transformers.js 4.3.0 は `nemotron3_diarization` に未対応で、ONNX にはニューラルネット部分 (`embed.onnx` / `step.onnx`) しか入っていない。
@@ -41,7 +41,10 @@ Transformers.js 4.3.0 は `nemotron3_diarization` に未対応で、ONNX には�
 
 - `capture.worklet.js` — AudioWorklet でマイク音声を 16 kHz mono に間引き、100 ms ずつ送る (AudioContext 自体はデバイスのレートのまま)
 - 話者分離は最初からストリーミング API なので、届いた分を最大 10 秒ずつ worker に `push` する。マイクでレイテンシー設定が「オフライン」のときは `low_latency` (1.04 s) に切り替える
+  - 低遅延設定は 0.72 s ごとに推論するが、WASM では 1 回 0.7〜1.2 s かかり追いつかない。マイク入力では推論中にたまったチャンクを 1 回の推論でまとめて処理する (`catchUp`) ので、遅れは積み上がらない (150 秒の録音で WASM 最大 2.3 s、WebGPU 最大 1.0 s)
 - 文字起こしは未確定区間の先頭から最大 30 秒を Whisper に渡し、確定した単語の終わりから次の窓を始める。窓の終わりにかかる最後の単語は切れている可能性があるので次の窓でかけ直す
+  - 録音中は 1〜2 秒ごとに区切る。単語の時刻は ±0.2 秒ほどずれるので、単語の終わりで区切ると次の単語の頭が欠ける。そこで録音中は、話者分離で 0.2 秒以上誰も話していない区間の中で区切り、区切れる無音がなければ確定を待つ (強制確定時だけ単語の終わりで区切る)。ファイルは区切りが窓ごとに 1 回なので単語の終わりで区切る (無音区間で区切ると窓の進みが小さくなり、文字起こしが 3 割ほど遅くなった)
+  - Whisper が同じ句を延々と繰り返す幻覚を起こした窓は、繰り返しの手前までを確定し、続きを別の位置から始まる窓でかけ直す
   - Whisper は無音からも「ご視聴ありがとうございました」のような文章を作るので、話者分離の確率を VAD として使う。誰も話していない区間は飛ばし、無音区間に落ちた単語は捨てる
   - Whisper は入力を 30 秒にゼロ埋めするため、窓の外の時刻を返すことがある。単語の時刻は窓の中に収める
   - ファイル (と録音停止後) は窓全体の話者分離を待ってから 1 回だけかける

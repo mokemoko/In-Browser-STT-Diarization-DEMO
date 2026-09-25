@@ -6,7 +6,7 @@
     <title>In-Browser STT + Diarization</title>
     <!-- GitHub Pages は COOP/COEP ヘッダーを付けられないため、Service Worker で付与してマルチスレッド WASM を有効にする -->
     <script src="./coi-serviceworker.js"></script>
-    <script type="module" crossorigin src="./assets/index-D0CUNHK4.js"></script>
+    <script type="module" crossorigin src="./assets/index-ocTtJBUK.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-D5cZpceS.css">
   </head>
   <body>
@@ -45,8 +45,8 @@
           <label>
             話者分離モデル
             <select id="diar-model">
-              <option value="step_int8" selected>INT8（約 103 MB）</option>
-              <option value="step">FP32（約 396 MB）</option>
+              <option value="step_int8|wasm" selected>INT8・WASM（約 103 MB）</option>
+              <option value="step|webgpu" data-webgpu-only>FP32・WebGPU（約 396 MB・高速）</option>
             </select>
           </label>
           <label>

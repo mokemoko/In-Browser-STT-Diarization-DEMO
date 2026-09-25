@@ -43,8 +43,8 @@
           <label>
             話者分離モデル
             <select id="diar-model">
-              <option value="step_int8" selected>INT8（約 103 MB）</option>
-              <option value="step">FP32（約 396 MB）</option>
+              <option value="step_int8|wasm" selected>INT8・WASM（約 103 MB）</option>
+              <option value="step|webgpu" data-webgpu-only>FP32・WebGPU（約 396 MB・高速）</option>
             </select>
           </label>
           <label>
