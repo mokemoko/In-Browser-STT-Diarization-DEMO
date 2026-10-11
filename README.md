@@ -22,6 +22,7 @@ GitHub Pages は COOP/COEP ヘッダーを付けられないため、[coi-servic
 | 処理 | モデル | ランタイム |
 |---|---|---|
 | 文字起こし | Whisper base / small / large-v3-turbo (`onnx-community/*_timestamped`, 単語タイムスタンプ付き) | Transformers.js (WebGPU があれば WebGPU, なければ WASM) |
+| 文字起こし (日本語) | Parakeet 0.6B の CTC ヘッド ([mokemoko/parakeet-ctc-0.6b-ja-ONNX](https://huggingface.co/mokemoko/parakeet-ctc-0.6b-ja-ONNX), 変換手順は `scripts/parakeet-ja/`)。時刻は CTC の出力から 80 ms 単位で組み立てる | Transformers.js。WebGPU は q4, WASM は int8 |
 | 話者分離 | NVIDIA Nemotron-3-Diarization の ONNX 変換版 ([NealCaren/Nemotron-3-Diarization-ONNX](https://huggingface.co/NealCaren/Nemotron-3-Diarization-ONNX)) | onnxruntime-web。INT8 を WASM (マルチスレッド) か、FP32 を WebGPU で。WebGPU があれば既定で WebGPU |
 | 突き合わせ | 各単語の区間で話者確率の平均が最大の話者を割り当て、同じ話者の連続を 1 発話にまとめる | plain JS |
 
